@@ -2,14 +2,29 @@
 mod test_main
 {
 	use super::super::{get_collection_key};
-	use stringstream::StringStream;
 	use std::path::Path;
+	use std::fs;
+	
+	#[test]	
+	fn count_indexes()
+	{
+		let mut counter = 0;
+		for entry in fs::read_dir(Path::new("./data")).unwrap() {
+			let entry = entry.unwrap().path();
+			
+			let extension = entry.extension().unwrap().to_str().unwrap();
+			
+			if extension == "rix"
+			{		
+				counter+=1;
+			}
+		}
+		assert_eq!(counter,1);
+	}
 	
 	#[test]
 	fn test_get_file_etx()
 	{
-		let file_name="FOO.txt";
-
 		let path = Path::new("/tmp/foo/bar.txt");
 		let file = path.file_stem().unwrap().to_str().unwrap();
 		let extension = path.extension().unwrap().to_str().unwrap();

@@ -1,10 +1,14 @@
-use indexmanager;
-use std::sync::{Arc, Mutex};
+use std::sync::{Mutex};
 use std::collections::HashMap;
 use stringstream::StringStream;
-use std::io::prelude::*;
 use std::str::from_utf8;
-
+use std::io;
+use std::io::prelude::*;
+use std::fs::File;
+use std::io::SeekFrom;
+use std::fs::OpenOptions;
+ 
+ 
 pub struct PersistenceManager
 {
 	pub files:Mutex<HashMap<String,Vec<String>>>
@@ -19,20 +23,61 @@ impl PersistenceManager
 			files:Mutex::new(HashMap::new())
 		}
 	}
-	pub fn write (&mut self, col_name:String, value: &[u8])->(String,usize) //File, offset
+	pub fn write (&mut self, col_name:&String, value: &[u8])->Result<(String,u64),String> //File, offset
 	{
-		let mut f = self.files.lock().unwrap();
-		let r = from_utf8(&value[..]).unwrap();
-		let mut col=f.entry(col_name.clone()).or_insert(vec![]);
-		col.push(r.to_owned());
-		(col_name,col.len()-1)
+		let file = format!("./{}.dat",col_name);
+		println!("file name:{}",file);
+		if let Ok(mut f) = OpenOptions::new().create(true).write(true).append(true).open(&file)
+		{
+			println!("file opened");
+			if let Ok(offset) = f.seek(SeekFrom::End(0))
+			{
+				println!("offset:{}",offset);
+				f.write(&value); //move the request to a byte_array
+				Ok((file,offset))
+			}
+			else
+			{
+				Err("Something went wrong!".to_owned())
+			}
+		}
+		else
+		{
+			Err("Something went wrong!".to_owned())
+		}
 	}
-	pub fn read(&mut self,file:String, offset:usize, size:usize) -> StringStream
+	pub fn read(&mut self,file:&String, offset:u64, size:usize) -> Option<StringStream>
 	{
-		let mut f = self.files.lock().unwrap();
-		let mut col=f.entry(file.clone()).or_insert(vec![]);
-		StringStream::new_reader(&col[offset][0..size])
+		if let Ok(mut f) = File::open(&file)
+		{
+			let mut buf=[0;8192];
+			// move the cursor 42 bytes from the start of the file
+			if let Ok(offset) = f.seek(SeekFrom::Start(offset))
+			{
+				let mut red = match f.read(&mut buf) //move the request to a byte_array
+				{
+					Ok(i)=>	
+					{ 
+						&buf[0..i]
+					}
+					Err(_)=>
+					{
+						panic!("boom!");
+					}
+				};
+				Some(StringStream::new(&red[0..size]))
+			}
+			else
+			{
+				None
+			}
+		}
+		else
+		{
+			None
+		}
 	}
+
 }
 
 
@@ -40,26 +85,15 @@ impl PersistenceManager
 mod test_persistence_manager
 {
 	use super::{PersistenceManager};
-	use std::str::from_utf8;
 
 	#[test]
-	fn test_write()
+	fn test_write_read()
 	{
-		let mut pm = PersistenceManager::new();
-		let (f,o) = pm.write("collection1".to_owned(),b"testing");
-		assert_eq!(pm.files.lock().unwrap().len(),1);
-		assert_eq!(f,"collection1".to_owned());
+		let mut pm = PersistenceManager::new(); 
+		let (f,o) = pm.write(&"collection1".to_owned(),b"testing").unwrap();
+		assert_eq!(f,"./collection1.dat".to_owned());
 		assert_eq!(o,0);
-	}
-	#[test]
-	fn test_read()
-	{
-		let mut pm = PersistenceManager::new();
-		let (f,o) = pm.write("collection1".to_owned(),b"testing");
-		assert_eq!(pm.files.lock().unwrap().len(),1);
-		assert_eq!(f,"collection1".to_owned());
-		assert_eq!(o,0);
-		let v = pm.read(f,o,b"testing".len());
+		let v = pm.read(&f,o,b"testing".len());
 		//let r = from_utf8(&v[..]).unwrap();
 		//assert_eq!("testing".to_owned(),r);
 	}

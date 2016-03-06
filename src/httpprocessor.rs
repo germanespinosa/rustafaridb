@@ -43,13 +43,10 @@ impl HttpProcessor
 				panic!("boom!");
 			}
 		};
-		println!(">>>>>>>>1 msg");
 		let (verb, url, version) = Self::process_start_line(get_line(red));
-		println!(">>>>>>>>1.1 msg");
 		self.verb=verb;
 		self.url=url;
 		self.http_version=version;
-		println!(">>>>>>>>2 msg");
 		red = next_line(red);
 		while let Some((h,v))=Self::process_header(get_line(red))
 		{
