@@ -11,7 +11,7 @@ pub struct HttpProcessor
 	pub request_body:Vec<u8>,
 	pub response_headers:HashMap<String,String>,
 	pub response_code:usize,
-}
+} 
 
 impl HttpProcessor 
 {
@@ -28,7 +28,7 @@ impl HttpProcessor
 			response_code:0,
 		}
 	}
-	pub fn process_request<R:Read>(&mut self, request_stream:&mut R)
+	pub fn process_request<R:Read>(&mut self, request_stream:&mut R) -> Result<(),()>
 	{
 		let mut buf=[0;8192]; //the limit fo http request is 8k
 		
@@ -40,10 +40,15 @@ impl HttpProcessor
 			}
 			Err(_)=>
 			{
-				panic!("boom!");
+				return Err(());
 			}
 		};
-		let (verb, url, version) = Self::process_start_line(get_line(red));
+		let first_line=get_line(red);
+		if first_line.len() == 0
+		{
+			return Err(());
+		}
+		let (verb, url, version) = Self::process_start_line(first_line);
 		self.verb=verb;
 		self.url=url;
 		self.http_version=version;
@@ -54,8 +59,9 @@ impl HttpProcessor
 			red = next_line(red);
 		}
 		self.request_body = red.to_owned();
+		Ok(())
 	}
-	pub fn send_response<W:Write, R:Read>(&mut self, instream : &mut R, mut outstream : &mut W)
+	pub fn send_response<W:Write, R:Read>(&mut self, instream : &mut R, mut outstream : &mut W) -> Result<(),()>
 	{
 		let mut msg = format!("{} {}\r\n",self.http_version, self.response_code);
 		for (h,v) in &self.response_headers
@@ -88,12 +94,14 @@ impl HttpProcessor
 			}
 			else
 			{ 
-				panic!("Error sending http response");
+				return Err(());
 			}
 		}
+		Ok(())
 	}	
 	pub fn process_start_line(start_line:&[u8])->(String,String,String)
-	{
+	{ 
+		println!(".................{} - {}",from_utf8(&start_line).unwrap().to_owned(),start_line.len());
 		if let Some(first_split) = find_char(&start_line,' ')
 		{
 			let verb = &start_line[..first_split];

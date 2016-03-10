@@ -40,7 +40,7 @@ impl IndexEntryContainer
 
 impl Index
 {
-	pub fn new<R:Read>(file : R)->Self
+	pub fn from_file<R:Read>(file : R)->Self
 	{
 		let mut lines = BufReader::new(file).lines();
 		let mut im = Index 
@@ -55,6 +55,14 @@ impl Index
 			im.fill_entry (ic);
 		}
 		im
+	}
+	pub fn new()->Self
+	{
+		Index 
+		{
+			index:HashMap::new(),
+			lock:Mutex::new(0),
+		}
 	}
     //nonblocking search
 	pub fn find_entry(&self, key:&String)->Option<&IndexEntry>
@@ -133,7 +141,7 @@ mod test_index_manager
 	fn test_get_entry()
 	{
 		let ss = StringStream::new_reader("{\"key\":\"key1\",\"file\":\"file1\",\"off_set\":100,\"size\":100}\n{\"key\":\"key2\",\"file\":\"file2\",\"off_set\":120,\"size\":200}");
-		let im = Index::new(ss);
+		let im = Index::from_file(ss);
 		let e = im.find_entry(&"key1".to_owned()).unwrap();
 		assert_eq!(e.key,"key1".to_owned());
 		assert_eq!(e.file,"file1".to_owned());
@@ -149,7 +157,7 @@ mod test_index_manager
 	fn test_update_entry()
 	{
 		let ss = StringStream::new_reader("{\"key\":\"key1\",\"file\":\"file1\",\"off_set\":100,\"size\":100}\n{\"key\":\"key2\",\"file\":\"file2\",\"off_set\":120,\"size\":200}");
-		let mut im = Index::new(ss);
+		let mut im = Index::from_file(ss);
 		assert_eq!(im.update_entry(IndexEntry{key:"key2".to_owned(),file:"file3".to_owned(),off_set:1000,size:10}),Ok(()));
 		let e = im.find_entry(&"key1".to_owned()).unwrap();
 		assert_eq!(e.key,"key1".to_owned());
@@ -166,7 +174,7 @@ mod test_index_manager
 	fn test_update_entry_not_found()
 	{
 		let ss = StringStream::new_reader("{\"key\":\"key1\",\"file\":\"file1\",\"off_set\":100,\"size\":100}\n{\"key\":\"key2\",\"file\":\"file2\",\"off_set\":120,\"size\":200}");
-		let mut im = Index::new(ss);
+		let mut im = Index::from_file(ss);
 		assert_eq!(im.update_entry(IndexEntry{key:"key3".to_owned(),file:"file3".to_owned(),off_set:1000,size:10}),Err(404));
 		let e = im.find_entry(&"key1".to_owned()).unwrap();
 		assert_eq!(e.key,"key1".to_owned());
@@ -183,21 +191,21 @@ mod test_index_manager
 	fn test_insert_entry()
 	{
 		let ss = StringStream::new_reader("{\"key\":\"key1\",\"file\":\"file1\",\"off_set\":100,\"size\":100}\n{\"key\":\"key2\",\"file\":\"file2\",\"off_set\":120,\"size\":200}");
-		let mut im = Index::new(ss);
+		let mut im = Index::from_file(ss);
 		assert_eq!(im.insert_entry(IndexEntry{key:"key3".to_owned(),file:"file3".to_owned(),off_set:1000,size:10}),Ok(()));
 	}
 	#[test]
 	fn test_insert_entry_conflict()
 	{
 		let ss = StringStream::new_reader("{\"key\":\"key1\",\"file\":\"file1\",\"off_set\":100,\"size\":100}\n{\"key\":\"key2\",\"file\":\"file2\",\"off_set\":120,\"size\":200}");
-		let mut im = Index::new(ss);
+		let mut im = Index::from_file(ss);
 		assert_eq!(im.insert_entry(IndexEntry{key:"key2".to_owned(),file:"file3".to_owned(),off_set:1000,size:10}),Err(409));
 	}
 	#[test]
 	fn test_remove_entry()
 	{
 		let ss = StringStream::new_reader("{\"key\":\"key1\",\"file\":\"file1\",\"off_set\":100,\"size\":100}\n{\"key\":\"key2\",\"file\":\"file2\",\"off_set\":120,\"size\":200}");
-		let mut im = Index::new(ss);
+		let mut im = Index::from_file(ss);
 		im.remove_entry("key2".to_owned());
 		let e = im.find_entry(&"key1".to_owned()).unwrap();
 		assert_eq!(e.key,"key1".to_owned());

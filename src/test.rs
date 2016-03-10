@@ -1,7 +1,6 @@
 #[cfg(test)]
 mod test_main
 {
-	use super::super::{get_collection_key};
 	use std::path::Path;
 	use std::fs;
 	
@@ -36,48 +35,6 @@ mod test_main
 	{
 		let file_name="FOO.txt";
 		assert_eq!("FOO".to_owned(),file_name[..file_name.len()-4].to_owned());
-	}
-	#[test]
-	fn test_get_collection_key_with_extra()
-	{
-		let (col, key)=get_collection_key(&"/c/k/1234".to_owned());		
-		assert_eq!(col,Some("c".to_owned()));
-		assert_eq!(key,Some("k".to_owned()));
-	}
-	#[test]
-	fn test_get_collection_key()
-	{
-		let (col, key)=get_collection_key(&"/c/k".to_owned());		
-		assert_eq!(col,Some("c".to_owned()));
-		assert_eq!(key,Some("k".to_owned()));
-	}
-	#[test]
-	fn test_get_collection_key_only_col()
-	{
-		let (col, key)=get_collection_key(&"/c".to_owned());		
-		assert_eq!(col,Some("c".to_owned()));
-		assert_eq!(key,None);
-	}
-	#[test]
-	fn test_get_collection_key_none()
-	{
-		let (col, key)=get_collection_key(&"/".to_owned());		
-		assert_eq!(col,None);
-		assert_eq!(key,None);
-	}
-	#[test]
-	fn test_get_collection_key_none_none()
-	{
-		let (col, key)=get_collection_key(&"//".to_owned());		
-		assert_eq!(col,None);
-		assert_eq!(key,None);
-	}
-	#[test]
-	fn test_get_collection_key_empty()
-	{
-		let (col, key)=get_collection_key(&"".to_owned());		
-		assert_eq!(col,None);
-		assert_eq!(key,None);
 	}
 	#[test]
 	fn test_hash()

@@ -1,0 +1,25 @@
+const CREATE : usize = 0;
+const UPDATE : usize = 1;
+const DELETE : usize = 2;
+
+fn get_collection_key(url: &String)->(Option<String>,Option<String>)
+{
+	let components: Vec<&str> = url.split('/').collect();
+	let mut col : Option<String> = None;
+	let mut key : Option<String> = None;
+	if components.len()>1
+	{
+		if components[1].len()>0 
+		{
+			col=Some(components[1].to_owned());
+		}
+		if components.len()>2
+		{
+			if components[2].len()>0 
+			{
+				key = Some(components[2].to_owned());
+			}
+		}
+	}
+	(col,key)
+}

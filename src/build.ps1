@@ -3,7 +3,7 @@
  {
 	 if ((get-itemproperty ./*.rs | where {$_.Mode -like "*a*"}).Length -gt 0)
 	 {
-		del ..\Collection1.dat
+		del ..\data\Collection*.dat
 	    clear
 		cargo test
 		attrib -A > null
