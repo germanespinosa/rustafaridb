@@ -12,7 +12,6 @@ use std::sync::mpsc::SyncSender;
 use std::sync::mpsc::Sender;
 use std::thread;
 
-
 pub struct PersistenceManager
 {
 	writer_Sender:SyncSender<(String,Vec<u8>,SyncSender<Result<(String,u64),String>>)>,
@@ -37,8 +36,13 @@ impl PersistenceManager
 					let writereq=writereq.unwrap();
 					let (col_name, value, call_back)=writereq.recv().unwrap();
 					println!("--------------PersistenceManager {} to the rescue",i);
-					let file_name = format!("{}_{}",col_name,i);
-					call_back.send(PersistenceManager::write_data(&file_name,&value));
+					let file = format!("{}_{}",col_name,i);
+					let file_path = format!("./{}.dat",file);
+					call_back.send(match PersistenceManager::write_data(&file_path,&value) 
+                    {
+                        Ok(w)=> Ok((file,w)),
+                        Err(e)=> Err(e),  
+                    });
 				}
 			});		
 		}
@@ -58,18 +62,17 @@ impl PersistenceManager
 		self.writer_Sender.send((col_name.clone(),value.to_owned(),tx));
 		rx.recv().unwrap()
 	}
-	pub fn write_data (col_name:&String, value: &[u8])->Result<(String,u64),String> //File, offset
+	pub fn write_data (file_path:&String, value: &[u8])->Result<u64,String> //File, offset
 	{
-		let file = format!("./{}.dat",col_name);
-		println!("file name:{}",file);
-		if let Ok(mut f) = OpenOptions::new().create(true).write(true).append(true).open(&file)
+		println!("file name:{}",file_path);
+		if let Ok(mut f) = OpenOptions::new().create(true).write(true).append(true).open(&file_path)
 		{
 			println!("file opened");
 			if let Ok(offset) = f.seek(SeekFrom::End(0))
 			{
 				println!("offset:{}",offset);
 				f.write(&value); //move the request to a byte_array
-				Ok((file,offset))
+				Ok(offset)
 			}
 			else
 			{
@@ -127,8 +130,7 @@ mod test_persistence_manager
 		let sender = PersistenceManager::start(1);
 		let mut pm = PersistenceManager::new(sender); 
 		let (f,o) = pm.write(&"collection1".to_owned(),b"testing").unwrap();
-		assert_eq!(f,"./collection1.dat".to_owned());
-		assert_eq!(o,0);
+		assert_eq!(f,"collection1_0".to_owned());
 		let v = pm.read(&f,o,b"testing".len());
 		//let r = from_utf8(&v[..]).unwrap();
 		//assert_eq!("testing".to_owned(),r);

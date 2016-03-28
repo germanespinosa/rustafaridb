@@ -3,7 +3,63 @@ use std::collections::HashMap;
 use std::io::BufReader;
 use std::io::prelude::*;
 use std::collections::hash_map::Entry::{Occupied, Vacant};
-use std::sync::Mutex;
+use std::sync::mpsc::channel;
+use std::sync::mpsc::{Sender, Receiver};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::sync::mpsc;
+use std::mem;
+use std::hash::{Hash, SipHasher, Hasher};
+/*
+
+key : 64
+file_name : 32 chars
+off_set : 8
+size : 8
+*/
+
+
+pub struct IndexPersistance
+{
+    pub sender:Sender<(IndexEntry, String)>,
+}
+
+impl IndexPersistance
+{
+    fn start( path:&String, buffersize: usize)->Sender<(IndexEntry, String)>
+    {
+        let (tx, rx): (Sender<(IndexEntry,String)>, Receiver<(IndexEntry,String)>) = mpsc::channel();
+        let limit = buffersize;
+        let path = path.clone();
+
+        thread::spawn(move|| 
+        {
+            let mut buffers:HashMap<String,Vec<u8>> = HashMap::new();
+
+            loop
+            {
+                // many assumptions here... 
+                let (ie,col)=rx.recv().unwrap();
+                if let Occupied(mut b) = buffers.entry(col.clone())
+				{
+					let buffer = b.get_mut();
+                    let bytes = IndexPersistance::get_bytes(ie);
+                }
+            }
+        });
+        tx
+    }
+    fn get_bytes(ie:IndexEntry)->[u8;48]
+    {
+        let i:[u8;48]=[0;48];
+        
+        i
+    }
+    fn stop ()
+    {
+    
+    }
+}
 
 #[derive(RustcDecodable, RustcEncodable)]
 pub struct IndexEntry
@@ -14,28 +70,10 @@ pub struct IndexEntry
 	pub size:usize,
 }
 
-pub struct IndexEntryContainer
-{
-	pub entry:IndexEntry,
-	pub lock:Mutex<usize>,
-}
-
 pub struct Index
 {
-	index:HashMap<String,IndexEntryContainer>,
+	index:HashMap<String,IndexEntry>,
 	lock:Mutex<usize>,
-}
-
-impl IndexEntryContainer
-{
-	pub fn new(entry:IndexEntry)->Self
-	{
-		IndexEntryContainer 
-		{
-			entry : entry,
-			lock : Mutex::new(0)
-		}
-	}
 }
 
 impl Index
@@ -51,8 +89,7 @@ impl Index
 		while let Some(Ok(line)) = lines.next()
 		{
 			let ie: IndexEntry = json::decode(&line).unwrap();
-			let ic = IndexEntryContainer::new (ie);
-			im.fill_entry (ic);
+			im.fill_entry (ie);
 		}
 		im
 	}
@@ -69,26 +106,25 @@ impl Index
 	{
 		match self.index.get(key)
 		{
-			Some(ec)=>Some(&ec.entry),
+			Some(ec)=>Some(&ec),
 			None=>None
 		}
 	}
 	//nonblocking not thread safe, only used to populate the index 
 	//before the indexmanager is copied
-	fn fill_entry(&mut self, index_entry:IndexEntryContainer) 
+	fn fill_entry(&mut self, index_entry:IndexEntry) 
 	{
-		let key=index_entry.entry.key.clone();
+		let key=index_entry.key.clone();
 		self.index.insert(key,index_entry);
 	}
 	pub fn insert_entry(&mut self, index_entry:IndexEntry) -> Result<(),usize>
 	{
-		let mut ec = IndexEntryContainer::new(index_entry);
-		let key= ec.entry.key.clone();
+		let key= index_entry.key.clone();
 		let guard = self.lock.lock();
 		match self.index.entry(key) {
 			Vacant(entry) => 
 			{ 
-				entry.insert(ec);
+				entry.insert(index_entry);
 				Ok(())
 			},
 			Occupied(_) => 
@@ -105,13 +141,12 @@ impl Index
 			{ 
 				Err(404)
 			},
-			Occupied(mut container) => 
+			Occupied(mut e) => 
 			{ 
-				let mut ec = container.get_mut();
-				let guard = ec.lock.lock();
-				ec.entry.file = index_entry.file;
-				ec.entry.off_set = index_entry.off_set;
-				ec.entry.size = index_entry.size;
+				let mut ec = e.get_mut();
+				ec.file = index_entry.file;
+				ec.off_set = index_entry.off_set;
+				ec.size = index_entry.size;
 				Ok(())
 			},
 		}
@@ -136,6 +171,54 @@ mod test_index_manager
 	use super::{IndexEntry, Index};
 	use stringstream::StringStream;
 	use rustc_serialize::json;
+    use std::mem;
+    use std::hash::{Hash, SipHasher, Hasher};
+    
+    fn my_hash<T>(obj: T) -> u64
+    where T: Hash
+    {
+        let mut hasher = SipHasher::new();
+        obj.hash(&mut hasher);
+        hasher.finish()
+    }
+    
+    #[test]
+    fn test_hash()
+    {
+        let a:u64=16167057210370256274;
+        assert_eq!(my_hash("string".to_owned()),16167057210370256274);
+    }
+    
+    #[test]
+    fn test_string_to_bytes()
+    {
+        let s = String::from("hello");
+        let bytes = s.into_bytes();
+        
+        assert_eq!(&[104, 101, 108, 108, 111][..], &bytes[..]);
+    }
+    
+    #[test]
+    fn test_transmute()
+    {
+        assert_eq!(mem::size_of::<IndexEntry>(),64);        
+        let b = unsafe 
+        {
+            let a = IndexEntry
+            {
+                key:"test".to_owned(),
+                file:"file".to_owned(),
+                off_set:100,
+                size:200,
+            } ;
+            
+            mem::transmute::<IndexEntry, [u8;64]>(a)
+        };
+        let a = unsafe 
+        {
+            mem::transmute::<[u8;64],IndexEntry>(b)
+        };
+    }
 
 	#[test]
 	fn test_get_entry()
