@@ -14,52 +14,63 @@ use std::thread;
 
 pub struct PersistenceManager
 {
-	writer_Sender:SyncSender<(String,Vec<u8>,SyncSender<Result<(String,u64),String>>)>,
+	writer_Sender:SyncSender<(String,String,Vec<u8>,SyncSender<Result<(u8,u64),String>>)>,
 }
 
 impl PersistenceManager
 {	
 
 //as Receiver<Result<StringStream,()>>
-	pub fn start (parallelism:usize) -> SyncSender<(String,Vec<u8>,SyncSender<Result<(String,u64),String>>)>
+	pub fn start (parallelism:u8) -> SyncSender<(String,String,Vec<u8>,SyncSender<Result<(u8,u64),String>>)>
 	{
-		let (tx, rx) = sync_channel::<(String,Vec<u8>,SyncSender<Result<(String,u64),String>>)>(0);
+		let (tx, rx) = sync_channel::<(String,String,Vec<u8>,SyncSender<Result<(u8,u64),String>>)>(0);
 		let mb = Arc::new(Mutex::new(rx));
 		for i in 0..parallelism //limit the number of threads 
 		{
 			let mb=mb.clone();
+            let processor = i as u8;
 			thread::spawn(move|| 
 			{
 				loop  
 				{
 					let writereq=mb.lock();
 					let writereq=writereq.unwrap();
-					let (col_name, value, call_back)=writereq.recv().unwrap();
-					println!("--------------PersistenceManager {} to the rescue",i);
-					let file = format!("{}_{}",col_name,i);
+					let (col_name, key, value, call_back)=writereq.recv().unwrap();
+					println!("--------------PersistenceManager {} to the rescue",processor);
+					let file = format!("{}_{}",col_name,processor);
 					let file_path = format!("./{}.dat",file);
-					call_back.send(match PersistenceManager::write_data(&file_path,&value) 
+                    match PersistenceManager::write_data(&file_path,&key.into_bytes()) 
                     {
-                        Ok(w)=> Ok((file,w)),
-                        Err(e)=> Err(e),  
-                    });
+                        Ok (wk) => 
+                        {
+                            call_back.send(match PersistenceManager::write_data(&file_path,&value) 
+                            {
+                                Ok(w)=> Ok((processor,(wk))),
+                                Err(e)=> Err(e),  
+                            });
+                        }
+                        Err(e) => 
+                        {
+                            call_back.send(Err(e));
+                        }
+                    }
 				}
 			});		
 		}
 		tx
 
 	}
-	pub fn new(writer_Sender:SyncSender<(String,Vec<u8>,SyncSender<Result<(String,u64),String>>)>)-> Self
+	pub fn new(writer_Sender:SyncSender<(String,String, Vec<u8>,SyncSender<Result<(u8,u64),String>>)>)-> Self
 	{
 		PersistenceManager
 		{
 			writer_Sender:writer_Sender,
 		}
 	} 
-	pub fn write (&mut self, col_name:&String, value: &[u8])->Result<(String,u64),String> //File, offset
+	pub fn write (&mut self, col_name:&String, key:&String, value: &[u8])->Result<(u8,u64),String> //File, offset
 	{ 
 		let (tx, rx) = sync_channel(0);
-		self.writer_Sender.send((col_name.clone(),value.to_owned(),tx));
+		self.writer_Sender.send((col_name.clone(),key.clone(),value.to_owned(),tx));
 		rx.recv().unwrap()
 	}
 	pub fn write_data (file_path:&String, value: &[u8])->Result<u64,String> //File, offset
@@ -84,7 +95,13 @@ impl PersistenceManager
 			Err("Something went wrong!".to_owned())
 		}
 	}
-	pub fn read(&mut self,file:&String, offset:u64, size:usize) -> Result<StringStream,()>
+    pub fn read (&self, col_name:String, file_number:u8, offset:u64, size:u32 ) -> Result<StringStream,()>
+    {
+		let file = format!("{}_{}",col_name,file_number);
+    	let file_path = format!("./{}.dat",file);
+        PersistenceManager::read_data(&file_path,offset,size)
+	} 
+	pub fn read_data(file:&String, offset:u64, size:u32) -> Result<StringStream,()>
 	{
 		if let Ok(mut f) = File::open(&file)
 		{
@@ -103,7 +120,7 @@ impl PersistenceManager
 						return Err(());
 					}
 				};
-				Ok(StringStream::new(&red[0..size]))
+				Ok(StringStream::new(&red[0..(size as usize)]))
 			}
 			else
 			{
@@ -118,7 +135,7 @@ impl PersistenceManager
 
 }
 
-
+/*
 #[cfg(test)]
 mod test_persistence_manager
 {
@@ -131,8 +148,9 @@ mod test_persistence_manager
 		let mut pm = PersistenceManager::new(sender); 
 		let (f,o) = pm.write(&"collection1".to_owned(),b"testing").unwrap();
 		assert_eq!(f,"collection1_0".to_owned());
-		let v = pm.read(&f,o,b"testing".len());
+		let v = pm.read("collection1".to_owned(),0,o,b"testing".len());
 		//let r = from_utf8(&v[..]).unwrap();
 		//assert_eq!("testing".to_owned(),r);
 	}
 }
+*/

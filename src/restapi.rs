@@ -15,13 +15,13 @@ use std::net::{TcpListener,TcpStream};
 
 pub struct RestApi
 {
-	sender:SyncSender<(String,Vec<u8>,SyncSender<Result<(String,u64),String>>)>,
+	sender:SyncSender<(String,String,Vec<u8>,SyncSender<Result<(String,u64),String>>)>,
 }
 
 impl RestApi
 {
 
-    pub fn start(parallelism:usize,col_indexes:HashMap<String,Index>,persistence_sender:SyncSender<(String,Vec<u8>,SyncSender<Result<(String,u64),String>>)>)-> SyncSender<TcpStream>
+    pub fn start(parallelism:usize,col_indexes:HashMap<String,Index>,persistence_sender:SyncSender<(String,String,Vec<u8>,SyncSender<Result<(u8,u64),String>>)>)-> SyncSender<TcpStream>
 	{
 		let (tx, rx) = sync_channel(3);
 		let mb = Arc::new(Mutex::new(rx));
@@ -101,7 +101,7 @@ impl RestApi
 						if let Some (entry) = ix.find_entry(&k)
 						{
 							p.response_code = 200;
-							if let Ok(mut response) = persistence.read(&entry.file,entry.off_set,entry.size)
+							if let Ok(mut response) = persistence.read(col.clone(),entry.file,entry.off_set + ( entry.key_size as u64 ),entry.size)
 							{
 								p.send_response(&mut response,&mut stream); 
 							}
@@ -149,15 +149,15 @@ impl RestApi
 					}
 					// If I didn't find the key so I write the record in the file
 					// still not blocking so this record might be discarded, but I don't really care
-					if let Ok((file,off_set)) = persistence.write(&col,&p.request_body)
+					if let Ok((file,off_set)) = persistence.write(&col,&k,&p.request_body)
 					{
 						//record saved to file properly, let's create the index entry
 						let mut ie = IndexEntry 
 						{
-							key:k,
-							size:p.request_body.len(),
+							size:p.request_body.len() as u32,
 							file:file,
 							off_set:off_set,
+                            key_size:k.len() as u8,
 						};
 						//let's try to update the index this is the only blocking operation
 						// lock the index collection for writing 
@@ -166,7 +166,7 @@ impl RestApi
 						if let Occupied(mut ix) = col_indexes.entry(col.clone())
 						{
 							let ix = ix.get_mut();
-							if let Ok(container) = ix.insert_entry(ie)
+							if let Ok(container) = ix.insert_entry(ie,k)
 							{
 								// the was not duplicated and the index was updated correctly
 								p.response_code = 200;
@@ -222,15 +222,15 @@ impl RestApi
 					}
 					// If I didn't find the key so I write the record in the file
 					// still not blocking so this record might be discarded, but I don't really care
-					if let Ok((file,off_set)) = persistence.write(&col,&p.request_body)
+					if let Ok((file,off_set)) = persistence.write(&col,&k,&p.request_body)
 					{
 						//record saved to file properly, let's create the index entry
 						let mut ie = IndexEntry 
 						{
-							key:k,
-							size:p.request_body.len(),
+							size:p.request_body.len() as u32,
 							file:file,
 							off_set:off_set,
+                            key_size:k.len() as u8,
 						};
 						//let's try to update the index this is the only blocking operation
 						// lock the index collection for writing 
@@ -239,12 +239,12 @@ impl RestApi
 						if let Occupied(mut ix) = col_indexes.entry(col.clone())
 						{
 							let ix = ix.get_mut();
-							if let Ok(container) = ix.update_entry(ie)
+							if let Ok(container) = ix.update_entry(ie,k.clone())
 							{
 								// the was not duplicated and the index was updated correctly
 								p.response_code = 200;
 								p.response_headers.insert("Content-Type".to_owned(),"text/html; charset=utf-8".to_owned());
-								p.send_response(&mut StringStream::new_reader("Inserted Successfuly"),&mut stream);
+								p.send_response(&mut StringStream::new_reader("Updated Successfuly"),&mut stream);
 							}
 							else
 							{

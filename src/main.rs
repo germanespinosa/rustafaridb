@@ -28,35 +28,10 @@ use std::sync::mpsc::{Receiver,Sender};
 use restapi::RestApi;
 use std::sync::RwLock;
 
-fn load_indexes(path : &Path) -> HashMap<String,Index>
-{
-	let mut col_indexes : HashMap<String,Index>=HashMap::new();
-
-	for entry in fs::read_dir(path).unwrap() {
-		let entry = entry.unwrap().path();
-		
-		let extension = entry.extension().unwrap().to_str().unwrap();
-		
-		if extension == "rix"
-		{	
-			let file_name = entry.file_stem().unwrap().to_str().unwrap();
-		
-			let file = match File::open(&entry) {
-				Err(why) => panic!("couldn't open {}: {}", entry.to_str().unwrap(),why),
-				Ok(file) => file,
-			};
-			let mut im = Index::from_file(file);
-			println!("loading collection {}",&file_name);
-			col_indexes.insert(file_name.to_owned(),im);
-		}
-	}
-	col_indexes
-}
-
 fn main() {
     let listener = TcpListener::bind("127.0.0.1:8080").unwrap(); 
 
-	let mut col_indexes = load_indexes(Path::new("./data"));
+	let mut col_indexes:HashMap <String,Index> = HashMap::new();//load_indexes(Path::new("./data"));
 	
 	let persistence_sender = PersistenceManager::start(10);
 

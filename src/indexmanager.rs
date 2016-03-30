@@ -10,25 +10,49 @@ use std::thread;
 use std::sync::mpsc;
 use std::mem;
 use std::hash::{Hash, SipHasher, Hasher};
-/*
-
-key : 64
-file_name : 32 chars
-off_set : 8
-size : 8
-*/
-
+use std::vec::Vec;
+use persistencemanager::PersistenceManager;
+use std::fs;
+use std::path::Path;
+use std::fs::File;
 
 pub struct IndexPersistance
 {
-    pub sender:Sender<(IndexEntry, String)>,
+    pub sender:Sender<Option<(IndexEntry, String)>>,
 }
 
 impl IndexPersistance
-{
-    fn start( path:&String, buffersize: usize)->Sender<(IndexEntry, String)>
+{   
+    fn load_indexes(path : &Path) -> HashMap<String,Index>
     {
-        let (tx, rx): (Sender<(IndexEntry,String)>, Receiver<(IndexEntry,String)>) = mpsc::channel();
+        let mut col_indexes : HashMap<String,Index>=HashMap::new();
+
+        for entry in fs::read_dir(path).unwrap() {
+            let entry = entry.unwrap().path();
+            
+            let extension = entry.extension().unwrap().to_str().unwrap();
+            
+            if extension == "ix"
+            {	
+                let file_name = entry.file_stem().unwrap().to_str().unwrap();
+                /*
+                let file = match File::open(&entry) {
+                    Err(why) => panic!("couldn't open {}: {}", entry.to_str().unwrap(),why),
+                    Ok(file) => file,
+                };
+                */
+                let mut im = Index::from_file(&entry.to_str().unwrap().to_owned());
+                println!("loading collection {}",&file_name);
+                col_indexes.insert(file_name.to_owned(),im);
+            }
+        }
+        col_indexes
+    }
+
+
+    fn start( path:&String, buffersize: usize)->(Sender<Option<(IndexEntry, String)>>, HashMap<String,Index>)
+    {
+        let (tx, rx): (Sender<Option<(IndexEntry,String)>>, Receiver<Option<(IndexEntry,String)>>) = mpsc::channel();
         let limit = buffersize;
         let path = path.clone();
 
@@ -39,89 +63,114 @@ impl IndexPersistance
             loop
             {
                 // many assumptions here... 
-                let (ie,col)=rx.recv().unwrap();
-                if let Occupied(mut b) = buffers.entry(col.clone())
-				{
-					let buffer = b.get_mut();
-                    let bytes = IndexPersistance::get_bytes(ie);
+                if let Some((ie,col))=rx.recv().unwrap()
+                {
+                    let file_path = format!("{}/{}.ix",path,col);
+                    match buffers.entry(col.clone())
+                    {
+                        Occupied(mut b)=>
+                        {
+                            let buffer = b.get_mut();
+                            let bytes = IndexPersistance::get_bytes(ie);
+                            buffer.extend_from_slice(&bytes);
+                            if bytes.len()>=limit
+                            {
+                                if let Ok(o)=PersistenceManager::write_data(&file_path, &buffer)
+                                {
+                                    buffer.truncate(0);
+                                }
+                            }
+                        }
+                        Vacant(buffer_entry)=>
+                        {
+                            let buffer:Vec<u8>=Vec::with_capacity(limit+24);
+                            buffer_entry.insert(buffer);
+                        }
+                    }
+                }
+                else // we need to write down all the buffers
+                {
+                    for (col, buffer) in buffers.iter_mut() 
+                    {
+                        let file_path = format!("{}/{}.ix",path,col);
+                        if let Ok(o)=PersistenceManager::write_data(&file_path, &buffer)
+                        {
+                            buffer.truncate(0);
+                        }
+                    }
                 }
             }
         });
-        tx
+        (tx,HashMap::new())
     }
-    fn get_bytes(ie:IndexEntry)->[u8;48]
+    fn get_bytes(ie:IndexEntry)->[u8;24]
     {
-        let i:[u8;48]=[0;48];
-        
-        i
+        unsafe 
+        {
+            mem::transmute::<IndexEntry,[u8;24]>(ie)
+        }  
     }
-    fn stop ()
-    {
-    
+    fn stop (index_maintenance:Sender<Option<(IndexEntry, String)>>)
+    { 
+        index_maintenance.send(None);
     }
 }
 
-#[derive(RustcDecodable, RustcEncodable)]
 pub struct IndexEntry
 {
-	pub key:String,
-	pub file:String,
+	pub key_size:u8,
+	pub file:u8,
 	pub off_set:u64,
-	pub size:usize,
+	pub size:u32,
 }
 
 pub struct Index
 {
-	index:HashMap<String,IndexEntry>,
-	lock:Mutex<usize>,
+	index:HashMap<u64,IndexEntry>,
 }
 
 impl Index
 {
-	pub fn from_file<R:Read>(file : R)->Self
-	{
-		let mut lines = BufReader::new(file).lines();
-		let mut im = Index 
-		{
-			index:HashMap::new(),
-			lock:Mutex::new(0),
-		};
-		while let Some(Ok(line)) = lines.next()
-		{
-			let ie: IndexEntry = json::decode(&line).unwrap();
-			im.fill_entry (ie);
-		}
-		im
-	}
+    fn get_hash<T>(obj: T) -> u64
+    where T: Hash
+    {
+        let mut hasher = SipHasher::new();
+        obj.hash(&mut hasher);
+        hasher.finish()
+    }
+    pub fn from_file(file_path:&String)->Self
+    {
+        let mut ix = Index::new();
+        let mut more = true;
+        while more
+        {
+        }
+        ix
+    }
 	pub fn new()->Self
 	{
 		Index 
 		{
 			index:HashMap::new(),
-			lock:Mutex::new(0),
 		}
 	}
     //nonblocking search
 	pub fn find_entry(&self, key:&String)->Option<&IndexEntry>
 	{
-		match self.index.get(key)
-		{
-			Some(ec)=>Some(&ec),
-			None=>None
-		}
+        let h=Index::get_hash(key.clone());
+		self.index.get(&h)
 	}
 	//nonblocking not thread safe, only used to populate the index 
 	//before the indexmanager is copied
-	fn fill_entry(&mut self, index_entry:IndexEntry) 
+	fn fill_entry(&mut self, index_entry:IndexEntry, key:u64) 
 	{
-		let key=index_entry.key.clone();
-		self.index.insert(key,index_entry);
+        let h=Index::get_hash(key.clone());
+		self.index.insert(h,index_entry);
 	}
-	pub fn insert_entry(&mut self, index_entry:IndexEntry) -> Result<(),usize>
+	pub fn insert_entry(&mut self, index_entry:IndexEntry, key:String) -> Result<(),usize>
 	{
-		let key= index_entry.key.clone();
-		let guard = self.lock.lock();
-		match self.index.entry(key) {
+        let h=Index::get_hash(key);
+		match self.index.entry(h) {
 			Vacant(entry) => 
 			{ 
 				entry.insert(index_entry);
@@ -133,10 +182,11 @@ impl Index
 			},
 		}
 	}
-	pub fn update_entry(&mut self, index_entry:IndexEntry) -> Result<(),usize>
+	pub fn update_entry(&mut self, index_entry:IndexEntry, key:String) -> Result<(),usize>
 	{
-		let key=index_entry.key.clone();
-		match self.index.entry(key) {
+        let key_size=key.len();
+        let h=Index::get_hash(key);
+		match self.index.entry(h) {
 			Vacant(_) => 
 			{ 
 				Err(404)
@@ -144,6 +194,7 @@ impl Index
 			Occupied(mut e) => 
 			{ 
 				let mut ec = e.get_mut();
+                ec.key_size = key_size as u8;
 				ec.file = index_entry.file;
 				ec.off_set = index_entry.off_set;
 				ec.size = index_entry.size;
@@ -153,8 +204,8 @@ impl Index
 	}
 	pub fn remove_entry(&mut self, key:String) -> Result<(),usize>
 	{
-		self.lock.lock();
-		if let Some(_) = self.index.remove(&key)
+        let h=Index::get_hash(key.clone());
+		if let Some(_) = self.index.remove(&h)
 		{
 			Ok(())
 		}
@@ -164,7 +215,7 @@ impl Index
 		}
 	}
 }
-
+/*
 #[cfg(test)]
 mod test_index_manager
 {
@@ -317,3 +368,4 @@ mod test_index_manager
 	}
 }
 
+*/
