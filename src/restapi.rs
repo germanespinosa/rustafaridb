@@ -7,23 +7,23 @@ use std::collections::hash_map::Entry::{Occupied, Vacant};
 use persistencemanager::PersistenceManager;
 use std::sync::RwLock;
 use std::sync::{Arc, Mutex};
-use std::sync::mpsc::SyncSender;
-use std::sync::mpsc::sync_channel;
 use std::thread;
 use std::net::{TcpListener,TcpStream};
-
+use std::sync::mpsc;
+use std::sync::mpsc::channel;
+use std::sync::mpsc::{Receiver,Sender};
 
 pub struct RestApi
 {
-	sender:SyncSender<(String,String,Vec<u8>,SyncSender<Result<(String,u64),String>>)>,
+	sender:Sender<(String,String,Vec<u8>,Sender<Result<(String,u64),String>>)>,
 }
 
 impl RestApi
 {
 
-    pub fn start(parallelism:usize,col_indexes:HashMap<String,Index>,persistence_sender:SyncSender<(String,String,Vec<u8>,SyncSender<Result<(u8,u64),String>>)>)-> SyncSender<TcpStream>
+    pub fn start(parallelism:usize,col_indexes:HashMap<String,Index>,ip_Sender: Sender<Option<(IndexEntry, String)>>,persistence_sender:Sender<(String,String,Vec<u8>,Sender<Result<(u8,u64),String>>)>)-> Sender<TcpStream>
 	{
-		let (tx, rx) = sync_channel(3);
+		let (tx, rx) = channel();
 		let mb = Arc::new(Mutex::new(rx));
 		let mut ixc = Arc::new(RwLock::new(col_indexes));
 		for i in 0..parallelism //limit the number of threads to 10
@@ -31,6 +31,7 @@ impl RestApi
 			let mb=mb.clone();
 			let mut ix_col = ixc.clone(); 
 			let persistence_sender = persistence_sender.clone();
+            let mut ip = ip_Sender.clone();
 			thread::spawn(move|| 
 			{
 				let mut pm = PersistenceManager::new(persistence_sender);
@@ -38,7 +39,7 @@ impl RestApi
 				{
 					// many assumptions here... 
 					let stream=mb.lock().unwrap().recv().unwrap(); 
-					RestApi::handle_client(stream,&ix_col,&mut pm);
+					RestApi::handle_client(stream, &ix_col, &ip, &mut pm);
 				}
 			});		
 		}
@@ -67,7 +68,7 @@ impl RestApi
 		(col,key)
 	}
 
-	pub fn handle_client<RW:Read + Write>(mut stream : RW, col_indexes:&Arc<RwLock<HashMap<String,Index>>>, persistence : &mut PersistenceManager)
+	pub fn handle_client<RW:Read + Write>(mut stream : RW, col_indexes:&Arc<RwLock<HashMap<String,Index>>>, ip_Sender: &Sender<Option<(IndexEntry, String)>>, persistence : &mut PersistenceManager)
 	{
 		let mut p=HttpProcessor::new();
 		if let Err(()) = p.process_request(&mut stream)
@@ -101,6 +102,7 @@ impl RestApi
 						if let Some (entry) = ix.find_entry(&k)
 						{
 							p.response_code = 200;
+                            println!("{}-{}-{}-{}-{}", &col.clone(),&entry.file,entry.off_set,entry.key_size,entry.size);
 							if let Ok(mut response) = persistence.read(col.clone(),entry.file,entry.off_set + ( entry.key_size as u64 ),entry.size)
 							{
 								p.send_response(&mut response,&mut stream); 
@@ -158,6 +160,7 @@ impl RestApi
 							file:file,
 							off_set:off_set,
                             key_size:k.len() as u8,
+                            key_hash:0
 						};
 						//let's try to update the index this is the only blocking operation
 						// lock the index collection for writing 
@@ -166,7 +169,7 @@ impl RestApi
 						if let Occupied(mut ix) = col_indexes.entry(col.clone())
 						{
 							let ix = ix.get_mut();
-							if let Ok(container) = ix.insert_entry(ie,k)
+							if let Ok(container) = ix.insert_entry(ie,k,ip_Sender)
 							{
 								// the was not duplicated and the index was updated correctly
 								p.response_code = 200;
@@ -231,6 +234,7 @@ impl RestApi
 							file:file,
 							off_set:off_set,
                             key_size:k.len() as u8,
+                            key_hash:0,
 						};
 						//let's try to update the index this is the only blocking operation
 						// lock the index collection for writing 
@@ -239,7 +243,7 @@ impl RestApi
 						if let Occupied(mut ix) = col_indexes.entry(col.clone())
 						{
 							let ix = ix.get_mut();
-							if let Ok(container) = ix.update_entry(ie,k.clone())
+							if let Ok(container) = ix.update_entry(ie,k.clone(),ip_Sender)
 							{
 								// the was not duplicated and the index was updated correctly
 								p.response_code = 200;
@@ -277,7 +281,7 @@ impl RestApi
 						if let Occupied(mut ix) = col_indexes.entry(col.clone())
 						{
 							let ix = ix.get_mut();
-							if let Ok(_) = ix.remove_entry(k)
+							if let Ok(_) = ix.remove_entry(k,ip_Sender)
 							{
 								// nobody deleted the record while we were writin the file
 								p.response_code = 200;
@@ -320,7 +324,7 @@ impl RestApi
 					println!("was here!! POST!");
 					if let Vacant(ixmanager) = col_indexes.entry(col.clone())
 					{
-						ixmanager.insert(Index::new());
+						ixmanager.insert(Index::new(col.clone()));
 						p.response_code = 200;
 						p.send_response(&mut StringStream::new_reader("Collection created successfully"),&mut stream);
 					}

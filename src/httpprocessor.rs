@@ -58,6 +58,7 @@ impl HttpProcessor
 			self.request_headers.insert(h,v);
 			red = next_line(red);
 		}
+        red = next_line(red);
 		self.request_body = red.to_owned();
 		Ok(())
 	}

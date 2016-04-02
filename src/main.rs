@@ -7,7 +7,7 @@ mod restapi;
 
 extern crate rustc_serialize;
 
-use indexmanager::{IndexEntry,Index};
+use indexmanager::{IndexEntry,Index,IndexPersistence};
 use rustc_serialize::json;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry::{Occupied, Vacant};
@@ -31,11 +31,11 @@ use std::sync::RwLock;
 fn main() {
     let listener = TcpListener::bind("127.0.0.1:8080").unwrap(); 
 
-	let mut col_indexes:HashMap <String,Index> = HashMap::new();//load_indexes(Path::new("./data"));
-	
 	let persistence_sender = PersistenceManager::start(10);
+    
+    let (ip_sender, mut col_indexes) = IndexPersistence::start("./indexes".to_owned(), 50);
 
-	let tx=RestApi::start(10,col_indexes,persistence_sender); 
+	let tx = RestApi::start(10, col_indexes, ip_sender, persistence_sender); 
 
     for incoming in listener.incoming() {
 		match incoming {
