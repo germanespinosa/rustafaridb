@@ -1,21 +1,17 @@
 use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
 use stringstream::StringStream;
-use std::str::from_utf8;
-use std::io;
 use std::io::prelude::*;
 use std::fs::File;
 use std::io::SeekFrom;
 use std::fs::OpenOptions;
 use std::thread;
-use std::sync::mpsc;
 use std::sync::mpsc::channel;
-use std::sync::mpsc::{Receiver,Sender};
+use std::sync::mpsc::{Sender};
 
 
 pub struct PersistenceManager
 {
-	writer_Sender:Sender<(String,String,Vec<u8>,Sender<Result<(u8,u64),String>>)>,
+	writer_sender:Sender<(String,String,Vec<u8>,Sender<Result<(u8,u64),String>>)>,
 }
 
 impl PersistenceManager
@@ -44,15 +40,17 @@ impl PersistenceManager
                     {
                         Ok (wk) => 
                         {
-                            call_back.send(match PersistenceManager::write_data(&file_path,&value) 
+                            if let Err(_) = call_back.send(match PersistenceManager::write_data(&file_path,&value) 
                             {
-                                Ok(w)=> Ok((processor,(wk))),
+                                Ok(_)=> Ok((processor,(wk))),
                                 Err(e)=> Err(e),  
-                            });
+                            })
+                            {panic!("Something went wrong");}
                         }
                         Err(e) => 
                         {
-                            call_back.send(Err(e));
+                            if let Err(_) = call_back.send(Err(e))
+                            {panic!("Something went wrong");}
                         }
                     }
 				}
@@ -61,18 +59,19 @@ impl PersistenceManager
 		tx
 
 	}
-	pub fn new(writer_Sender:Sender<(String,String, Vec<u8>,Sender<Result<(u8,u64),String>>)>)-> Self
+	pub fn new(writer_sender:Sender<(String,String, Vec<u8>,Sender<Result<(u8,u64),String>>)>)-> Self
 	{
 		PersistenceManager
 		{
-			writer_Sender:writer_Sender,
+			writer_sender:writer_sender,
 		}
 	} 
 	pub fn write (&mut self, col_name:&String, key:&String, value: &[u8])->Result<(u8,u64),String> //File, offset
 	{ 
 		let (tx, rx) = channel();
-		self.writer_Sender.send((col_name.clone(),key.clone(),value.to_owned(),tx));
-		rx.recv().unwrap()
+		if let Err(_) = self.writer_sender.send((col_name.clone(),key.clone(),value.to_owned(),tx))
+		{panic!("Something went wrong");}
+        rx.recv().unwrap()
 	}
 	pub fn write_data (file_path:&String, value: &[u8])->Result<u64,String> //File, offset
 	{
@@ -83,8 +82,9 @@ impl PersistenceManager
 			if let Ok(offset) = f.seek(SeekFrom::End(0))
 			{
 				println!("offset:{}",offset);
-				f.write(&value); //move the request to a byte_array
-				Ok(offset)
+				if let Err(_) = f.write(&value) //move the request to a byte_array
+				{panic!("Something went wrong");}
+                Ok(offset)
 			}
 			else
 			{
@@ -101,11 +101,18 @@ impl PersistenceManager
 		let file = format!("{}_{}",col_name,file_number);
     	let file_path = format!("./{}.dat",file);
         let mut buf=[0;8192];
-        match PersistenceManager::read_data(&file_path,offset,size,&mut buf)
+        match PersistenceManager::read_data(&file_path,offset,&mut buf)
         {
             Ok(red)=>
             {
-                Ok(StringStream::new(&buf[0..(size as usize)]))
+                if (size as usize) < red
+                {
+                    Ok(StringStream::new(&buf[0..(size as usize)]))
+                }
+                else
+                {
+                    Ok(StringStream::new(&buf[0..red]))
+                }                
             }
             Err(e)=>
             {
@@ -113,13 +120,13 @@ impl PersistenceManager
             }
         }
 	} 
-	pub fn read_data(file:&String, offset:u64, size:u32, mut buf: &mut [u8]) -> Result<usize,()>
+	pub fn read_data(file:&String, offset:u64, mut buf: &mut [u8]) -> Result<usize,()>
 	{
 		if let Ok(mut f) = File::open(&file)
 		{
 			//
 			// move the cursor 42 bytes from the start of the file
-			if let Ok(offset) = f.seek(SeekFrom::Start(offset))
+			if let Ok(_) = f.seek(SeekFrom::Start(offset))
 			{
 				match f.read(&mut buf) //move the request to a byte_array
 				{

@@ -1,6 +1,9 @@
 use std::str::from_utf8;
 use std::collections::HashMap;
 use std::io::prelude::*;
+use std::sync::mpsc::Sender;
+use std::net::{TcpListener,TcpStream};
+use std::thread;
 
 pub struct HttpProcessor
 {
@@ -15,6 +18,34 @@ pub struct HttpProcessor
 
 impl HttpProcessor 
 {
+    pub fn start ( interface:String, port:usize, rest_api_sender:Sender <TcpStream> )
+    {
+        thread::spawn(move|| 
+        {
+            let uri = format!("{}:{}",interface,port);
+            let listener = TcpListener::bind(uri.as_str()).unwrap(); 
+            for incoming in listener.incoming() 
+            {
+                match incoming 
+                {
+                    Ok(stream) => 
+                    {
+                        let tx= rest_api_sender.clone();
+                        thread::spawn(move|| 
+                        {
+                            println!("Message received ");
+                            if let Err(_)=tx.send(stream)
+                            {
+                                panic!("problems passing the request to the processor");
+                            }
+
+                        });
+                    }
+                    Err(_) => { panic!("connection failed!"); }
+                }
+            }    
+        });
+    }
 	pub fn new()-> Self
 	{
 		HttpProcessor 
@@ -281,7 +312,8 @@ mod test_httpprocessor
 		let req = "GET /test HTTP1.1\r\nHeader1: value\r\nHeader2: value2\r\n\r\n";
 		let mut ss=StringStream::new_reader(req);
 		let mut ct = HttpProcessor::new();
-		ct.process_request(&mut ss);
+		if let Err(_) = ct.process_request(&mut ss)
+        { panic! ("something went wrong!");}
 		assert_eq!(ct.verb,"GET".to_owned());
 		assert_eq!(ct.url,"/test".to_owned());
 		assert_eq!(ct.http_version,"HTTP1.1".to_owned());
@@ -293,7 +325,8 @@ mod test_httpprocessor
 		let req = "GET /test HTTP1.1\r\nHeader1: value1\r\nHeader2: value2\r\n\r\n";
 		let mut ss=StringStream::new_reader(req);
 		let mut ct = HttpProcessor::new();
-		ct.process_request(&mut ss);
+		if let Err(_) = ct.process_request(&mut ss)
+        { panic! ("something went wrong!");}
 		let v =ct.request_headers.get(&"Header1".to_owned());
 		assert_eq!(v,Some(&"value1".to_owned()));
 		let v =ct.request_headers.get(&"Header2".to_owned());
@@ -309,15 +342,16 @@ mod test_httpprocessor
 		let req = "GET /test HTTP1.1\r\nHeader1: value1\r\nHeader2: value2\r\n\r\n";
 		let mut ss=StringStream::new_reader(req);
 		let mut ct = HttpProcessor::new();
-		ct.process_request(&mut ss);
-
+		if let Err(_) = ct.process_request(&mut ss)
+        { panic! ("something went wrong!");}
 		let response = "Hello!";
 		let mut response_stream=StringStream::new_reader(response);
 
 		let mut out_stream=StringStream::new_writer();
 
 		ct.response_code=200;
-		ct.send_response(&mut response_stream, &mut out_stream);
+		if let Err(_) = ct.send_response(&mut response_stream, &mut out_stream)
+        { panic! ("something went wrong!");}
 		assert_eq!(out_stream.to_string(),"HTTP1.1 200\r\n\r\nHello!".to_owned());
 	}
 	#[test]
@@ -326,8 +360,8 @@ mod test_httpprocessor
 		let req = "GET /test HTTP1.1\r\nHeader1: value1\r\nHeader2: value2\r\n\r\n";
 		let mut ss=StringStream::new_reader(req);
 		let mut ct = HttpProcessor::new();
-		ct.process_request(&mut ss);
-
+		if let Err(_) = ct.process_request(&mut ss)
+        { panic! ("something went wrong!");}
 		let response = "Hello!";
 		let mut response_stream=StringStream::new_reader(response);
 
@@ -335,7 +369,8 @@ mod test_httpprocessor
 
 		ct.response_code=200;
 		ct.response_headers.insert("header".to_owned(),"value".to_owned());
-		ct.send_response(&mut response_stream, &mut out_stream);
+		if let Err(_) = ct.send_response(&mut response_stream, &mut out_stream)
+        { panic! ("something went wrong!");}
 		assert_eq!(out_stream.to_string(),"HTTP1.1 200\r\nheader: value\r\n\r\nHello!".to_owned());
 	}
 	

@@ -4,55 +4,40 @@ mod httpprocessor;
 mod indexmanager;
 mod persistencemanager;
 mod restapi;
+mod log;
 
-extern crate rustc_serialize;
-
-use indexmanager::{IndexEntry,Index,IndexPersistence};
-use rustc_serialize::json;
-use std::collections::HashMap;
-use std::collections::hash_map::Entry::{Occupied, Vacant};
-use stringstream::StringStream;
-use httpprocessor::HttpProcessor;
-use std::path::Path;
-use std::fs;
-use std::net::{TcpListener,TcpStream};
-use std::thread;
-use std::io::BufReader;
-use std::io::prelude::*;
-use std::fs::File;
-use std::sync::mpsc::sync_channel;
-use std::sync::{Arc, Mutex};
-use std::mem::size_of;
+use indexmanager::IndexPersistence;
+use httpprocessor::HttpProcessor; 
 use persistencemanager::PersistenceManager;
-use std::sync::mpsc::{Receiver,Sender};
 use restapi::RestApi;
-use std::sync::RwLock;
+use std::io;
+use std::io::prelude::*;
+
 
 fn main() {
-    let listener = TcpListener::bind("127.0.0.1:8080").unwrap(); 
 
 	let persistence_sender = PersistenceManager::start(10);
     
-    let (ip_sender, mut col_indexes) = IndexPersistence::start("./indexes".to_owned(), 50);
+    let (ip_sender, col_indexes) = IndexPersistence::start("./indexes".to_owned(), 8192, 10);
 
-	let tx = RestApi::start(10, col_indexes, ip_sender, persistence_sender); 
+	let tx = RestApi::start(10, col_indexes, ip_sender.clone(), persistence_sender); 
 
-    for incoming in listener.incoming() {
-		match incoming {
-			Ok(stream) => {
-				let tx= tx.clone();
-				thread::spawn(move|| 
-				{
-					println!("Message received ");
-					if let Err(_)=tx.send(stream)
-					{
-						panic!("problems passing the request to the processor");
-					}
+    HttpProcessor::start("127.0.0.1".to_owned(),8080,tx);
 
-				});
-			}
-			Err(_) => { panic!("connection failed!"); }
-		}
+    println!("Welcome to RustafariDB v1.1");    
+    println!("Type 'quit' to finish!");
+    let mut command = String::new();
+    while command != "quit".to_owned()
+    {
+        let mut rf = String::new(); 
+        print!("!->");
+        io::stdout().flush().unwrap();
+        io::stdin().read_line(&mut rf)
+            .ok()
+            .expect("Failed to read line");
+        
+        command = rf.clone().trim().to_owned();        
     }
-	drop(listener);
+    IndexPersistence::stop (ip_sender);
+
 }

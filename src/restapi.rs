@@ -8,10 +8,9 @@ use persistencemanager::PersistenceManager;
 use std::sync::RwLock;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::net::{TcpListener,TcpStream};
-use std::sync::mpsc;
+use std::net::{TcpStream};      
 use std::sync::mpsc::channel;
-use std::sync::mpsc::{Receiver,Sender};
+use std::sync::mpsc::Sender;
 
 pub struct RestApi
 {
@@ -21,17 +20,18 @@ pub struct RestApi
 impl RestApi
 {
 
-    pub fn start(parallelism:usize,col_indexes:HashMap<String,Index>,ip_Sender: Sender<Option<(IndexEntry, String)>>,persistence_sender:Sender<(String,String,Vec<u8>,Sender<Result<(u8,u64),String>>)>)-> Sender<TcpStream>
+    pub fn start(parallelism:usize,col_indexes:HashMap<String,Index>,ip_sender: Sender<Option<(IndexEntry, String)>>,persistence_sender:Sender<(String,String,Vec<u8>,Sender<Result<(u8,u64),String>>)>)-> Sender<TcpStream>
 	{
 		let (tx, rx) = channel();
 		let mb = Arc::new(Mutex::new(rx));
-		let mut ixc = Arc::new(RwLock::new(col_indexes));
+		let ixc = Arc::new(RwLock::new(col_indexes));
 		for i in 0..parallelism //limit the number of threads to 10
 		{
+            println!("RestApi processor {} started",i);
 			let mb=mb.clone();
-			let mut ix_col = ixc.clone(); 
+			let ix_col = ixc.clone(); 
 			let persistence_sender = persistence_sender.clone();
-            let mut ip = ip_Sender.clone();
+            let ip = ip_sender.clone();
 			thread::spawn(move|| 
 			{
 				let mut pm = PersistenceManager::new(persistence_sender);
@@ -68,7 +68,7 @@ impl RestApi
 		(col,key)
 	}
 
-	pub fn handle_client<RW:Read + Write>(mut stream : RW, col_indexes:&Arc<RwLock<HashMap<String,Index>>>, ip_Sender: &Sender<Option<(IndexEntry, String)>>, persistence : &mut PersistenceManager)
+	pub fn handle_client<RW:Read + Write>(mut stream : RW, col_indexes:&Arc<RwLock<HashMap<String,Index>>>, ip_sender: &Sender<Option<(IndexEntry, String)>>, persistence : &mut PersistenceManager)
 	{
 		let mut p=HttpProcessor::new();
 		if let Err(()) = p.process_request(&mut stream)
@@ -79,7 +79,8 @@ impl RestApi
 		
 		if let None = col {
 			p.response_code = 503;
-			p.send_response(&mut StringStream::new_reader("Internal Server Error"),&mut stream);
+			if let Err(_) = p.send_response(&mut StringStream::new_reader("Internal Server Error"),&mut stream)
+            {panic! ("something went wrong!");}
 			return;
 		}
 
@@ -105,24 +106,28 @@ impl RestApi
                             println!("{}-{}-{}-{}-{}", &col.clone(),&entry.file,entry.off_set,entry.key_size,entry.size);
 							if let Ok(mut response) = persistence.read(col.clone(),entry.file,entry.off_set + ( entry.key_size as u64 ),entry.size)
 							{
-								p.send_response(&mut response,&mut stream); 
+								if let Err(_) = p.send_response(&mut response,&mut stream)
+                                {panic! ("something went wrong!");}
 							}
 							else
 							{
 								p.response_code = 503;
-								p.send_response(&mut StringStream::new_reader("Internal Server Error"),&mut stream);
+								if let Err(_) = p.send_response(&mut StringStream::new_reader("Internal Server Error"),&mut stream)
+                                {panic! ("something went wrong!");}
 							}
 						}
 						else
 						{
 							p.response_code = 404;
-							p.send_response(&mut StringStream::new_reader("Not Found"),&mut stream);
+							if let Err(_) = p.send_response(&mut StringStream::new_reader("Not Found"),&mut stream)
+                            {panic! ("something went wrong!");}
 						}
 					}
 					else
 					{
 						p.response_code = 404;
-						p.send_response(&mut StringStream::new_reader("Collection not Found"),&mut stream);
+						if let Err(_) = p.send_response(&mut StringStream::new_reader("Collection not Found"),&mut stream)
+                        {panic! ("something went wrong!");}
 					}
 				}
 				"POST" => 
@@ -134,18 +139,20 @@ impl RestApi
 						if let Some(ix) = col_indexes.get(&col.clone())
 						{
 							let mut found=false; 
-							{if let Some (entry) = ix.find_entry(&k) {found=true};}
+							{if let Some (_) = ix.find_entry(&k) {found=true};}
 							if found
 							{
 								p.response_code = 409;
-								p.send_response(&mut StringStream::new_reader("Conflictive key"),&mut stream);
+								if let Err(_) = p.send_response(&mut StringStream::new_reader("Conflictive key"),&mut stream)
+                                {panic! ("something went wrong!");}
 								return;
 							}
 						}
 						else
 						{
 							p.response_code = 404;
-							p.send_response(&mut StringStream::new_reader("Collection not Found"),&mut stream);
+							if let Err(_) = p.send_response(&mut StringStream::new_reader("Collection not Found"),&mut stream)
+                            {panic! ("something went wrong!");}
 							return;
 						}
 					}
@@ -154,7 +161,7 @@ impl RestApi
 					if let Ok((file,off_set)) = persistence.write(&col,&k,&p.request_body)
 					{
 						//record saved to file properly, let's create the index entry
-						let mut ie = IndexEntry 
+						let ie = IndexEntry 
 						{
 							size:p.request_body.len() as u32,
 							file:file,
@@ -169,12 +176,13 @@ impl RestApi
 						if let Occupied(mut ix) = col_indexes.entry(col.clone())
 						{
 							let ix = ix.get_mut();
-							if let Ok(container) = ix.insert_entry(ie,k,ip_Sender)
+							if let Ok(_) = ix.insert_entry(ie,k,ip_sender)
 							{
 								// the was not duplicated and the index was updated correctly
 								p.response_code = 200;
 								p.response_headers.insert("Content-Type".to_owned(),"text/html; charset=utf-8".to_owned());
-								p.send_response(&mut StringStream::new_reader("Inserted Successfuly"),&mut stream);
+								if let Err(_) = p.send_response(&mut StringStream::new_reader("Inserted Successfuly"),&mut stream)
+                                {panic! ("something went wrong!");}
 							}
 							else
 							{
@@ -182,21 +190,23 @@ impl RestApi
 								// we created an orphan record in the file
 								// we don't care... the defrag process will eliminate it
 								p.response_code = 409;
-								p.send_response(&mut StringStream::new_reader("Conflictive key"),&mut stream);
+								if let Err(_) = p.send_response(&mut StringStream::new_reader("Conflictive key"),&mut stream)
+                                {panic! ("something went wrong!");}
 							}
 						}
 						else 
 						{
 							// very odd case 
 							p.response_code = 404;
-							p.send_response(&mut StringStream::new_reader("Collection not Found"),&mut stream);
-							return;
+							if let Err(_) = p.send_response(&mut StringStream::new_reader("Collection not Found"),&mut stream)
+                            {panic! ("something went wrong!");}
 						}
 					}
 					else //I/O Error
 					{
 							p.response_code = 503;
-							p.send_response(&mut StringStream::new_reader("Server error"),&mut stream);
+							if let Err(_) = p.send_response(&mut StringStream::new_reader("Server error"),&mut stream)
+                            {panic! ("something went wrong!");}
 					}
 				}
 				"PUT" => 
@@ -208,18 +218,20 @@ impl RestApi
 						if let Some(ix) = col_indexes.get(&col.clone())
 						{
 							let mut found=false; 
-							{if let Some (entry) = ix.find_entry(&k) {found=true};}
+							{if let Some (_) = ix.find_entry(&k) {found=true};}
 							if !found
 							{
 								p.response_code = 404;
-								p.send_response(&mut StringStream::new_reader("Not Found"),&mut stream);
+								if let Err(_) = p.send_response(&mut StringStream::new_reader("Not Found"),&mut stream)
+                                {panic! ("something went wrong!");}
 								return;
 							}
 						}
 						else
 						{
 							p.response_code = 404;
-							p.send_response(&mut StringStream::new_reader("Collection not Found"),&mut stream);
+							if let Err(_) = p.send_response(&mut StringStream::new_reader("Collection not Found"),&mut stream)
+                            {panic! ("something went wrong!");}
 							return;
 						}
 					}
@@ -228,7 +240,7 @@ impl RestApi
 					if let Ok((file,off_set)) = persistence.write(&col,&k,&p.request_body)
 					{
 						//record saved to file properly, let's create the index entry
-						let mut ie = IndexEntry 
+						let ie = IndexEntry 
 						{
 							size:p.request_body.len() as u32,
 							file:file,
@@ -243,12 +255,13 @@ impl RestApi
 						if let Occupied(mut ix) = col_indexes.entry(col.clone())
 						{
 							let ix = ix.get_mut();
-							if let Ok(container) = ix.update_entry(ie,k.clone(),ip_Sender)
+							if let Ok(_) = ix.update_entry(ie,k.clone(),ip_sender)
 							{
 								// the was not duplicated and the index was updated correctly
 								p.response_code = 200;
 								p.response_headers.insert("Content-Type".to_owned(),"text/html; charset=utf-8".to_owned());
-								p.send_response(&mut StringStream::new_reader("Updated Successfuly"),&mut stream);
+								if let Err(_) = p.send_response(&mut StringStream::new_reader("Updated Successfuly"),&mut stream)
+                                {panic! ("something went wrong!");}
 							}
 							else
 							{
@@ -256,21 +269,23 @@ impl RestApi
 								// we created an orphan record in the file
 								// we don't care... the defrag process will eliminate it
 								p.response_code = 409;
-								p.send_response(&mut StringStream::new_reader("Conflictive key"),&mut stream);
+								if let Err(_) = p.send_response(&mut StringStream::new_reader("Conflictive key"),&mut stream)
+                                {panic! ("something went wrong!");}
 							}
 						}
 						else 
 						{
 							// very odd case 
 							p.response_code = 404;
-							p.send_response(&mut StringStream::new_reader("Collection not Found"),&mut stream);
-							return;
+							if let Err(_) = p.send_response(&mut StringStream::new_reader("Collection not Found"),&mut stream)
+							{panic! ("something went wrong!");}
 						}
 					}
 					else //I/O Error
 					{
 							p.response_code = 503;
-							p.send_response(&mut StringStream::new_reader("Server error"),&mut stream);
+							if let Err(_) = p.send_response(&mut StringStream::new_reader("Server error"),&mut stream)
+                            {panic! ("something went wrong!");}
 					}
 				}
 				"DELETE" => 
@@ -281,12 +296,13 @@ impl RestApi
 						if let Occupied(mut ix) = col_indexes.entry(col.clone())
 						{
 							let ix = ix.get_mut();
-							if let Ok(_) = ix.remove_entry(k,ip_Sender)
+							if let Ok(_) = ix.remove_entry(k,ip_sender)
 							{
 								// nobody deleted the record while we were writin the file
 								p.response_code = 200;
 								p.response_headers.insert("Content-Type".to_owned(),"text/html; charset=utf-8".to_owned());
-								p.send_response(&mut StringStream::new_reader("Removed Ok"),&mut stream);
+								if let Err(_) = p.send_response(&mut StringStream::new_reader("Removed Ok"),&mut stream)
+                                {panic! ("something went wrong!");}
 							}
 							else
 							{
@@ -294,7 +310,8 @@ impl RestApi
 								// we created an orphan record in the file
 								// we don't care... the defrag process will eliminate it
 								p.response_code = 404;
-								p.send_response(&mut StringStream::new_reader("Not Found"),&mut stream);
+								if let Err(_) = p.send_response(&mut StringStream::new_reader("Not Found"),&mut stream)
+                                {panic! ("something went wrong!");}
 							}
 						}
 						else
@@ -303,13 +320,15 @@ impl RestApi
 							// we created an orphan record in the file
 							// we don't care... the defrag process will eliminate it
 							p.response_code = 404;
-							p.send_response(&mut StringStream::new_reader("Not Found"),&mut stream);
+							if let Err(_) = p.send_response(&mut StringStream::new_reader("Not Found"),&mut stream)
+                            {panic! ("something went wrong!");}
 						}
 				}
 				_ =>
 				{
 						p.response_code = 503;
-						p.send_response(&mut StringStream::new_reader("Server error"),&mut stream);
+						if let Err(_) = p.send_response(&mut StringStream::new_reader("Server error"),&mut stream)
+                        {panic! ("something went wrong!");}
 				}
 			}
 		}
@@ -326,12 +345,14 @@ impl RestApi
 					{
 						ixmanager.insert(Index::new(col.clone()));
 						p.response_code = 200;
-						p.send_response(&mut StringStream::new_reader("Collection created successfully"),&mut stream);
+						if let Err(_) = p.send_response(&mut StringStream::new_reader("Collection created successfully"),&mut stream)
+                        {panic! ("something went wrong!");}
 					}
 					else
 					{
 						p.response_code = 409;
-						p.send_response(&mut StringStream::new_reader("Conflictive key"),&mut stream);
+						if let Err(_) = p.send_response(&mut StringStream::new_reader("Conflictive key"),&mut stream)
+                        {panic! ("something went wrong!");}
 					}
 				}
 				"DELETE" => 
@@ -340,18 +361,21 @@ impl RestApi
 					if let Some(_) = col_indexes.remove(&col)
 					{
 						p.response_code = 200;
-						p.send_response(&mut StringStream::new_reader("Collection deleted successfully"),&mut stream);
+						if let Err(_) = p.send_response(&mut StringStream::new_reader("Collection deleted successfully"),&mut stream)
+                        {panic! ("something went wrong!");}
 					}
 					else
 					{
 						p.response_code = 404;
-						p.send_response(&mut StringStream::new_reader("Not Found"),&mut stream);
+						if let Err(_) = p.send_response(&mut StringStream::new_reader("Not Found"),&mut stream)
+                        {panic! ("something went wrong!");}
 					}
 				}
 				_ =>
 				{
 						p.response_code = 503;
-						p.send_response(&mut StringStream::new_reader("Server error"),&mut stream);
+						if let Err(_) = p.send_response(&mut StringStream::new_reader("Server error"),&mut stream)
+                        {panic! ("something went wrong!");}
 				}
 			}
 		}

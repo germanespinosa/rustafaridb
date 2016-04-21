@@ -1,11 +1,6 @@
-use rustc_serialize::json;
 use std::collections::HashMap;
-use std::io::BufReader;
-use std::io::prelude::*;
 use std::collections::hash_map::Entry::{Occupied, Vacant};
-use std::sync::mpsc::channel;
 use std::sync::mpsc::{Sender, Receiver};
-use std::sync::{Arc, Mutex};
 use std::thread;
 use std::sync::mpsc;
 use std::mem;
@@ -14,13 +9,15 @@ use std::vec::Vec;
 use persistencemanager::PersistenceManager;
 use std::fs;
 use std::path::Path;
-use std::fs::File;
+use std::thread::sleep;
+use std::time::Duration;
+
 
 const INDEX_ENTRY_SIZE: usize = 32;
 
 pub struct IndexPersistence
 {
-    pub sender:Sender<Option<(IndexEntry, String)>>,
+    sender:Sender<Option<(IndexEntry, String)>>,
 }
 
 impl IndexPersistence
@@ -44,7 +41,7 @@ impl IndexPersistence
                 };
                 */
                 
-                let mut im = Index::from_file(&entry.to_str().unwrap().to_owned(), file_name.to_owned());
+                let im = Index::from_file(&entry.to_str().unwrap().to_owned(), file_name.to_owned());
                 println!("loading collection {}",&file_name);
                 col_indexes.insert(file_name.to_owned(),im);
             }
@@ -52,8 +49,7 @@ impl IndexPersistence
         col_indexes 
     }
 
-
-    pub fn start( path:String, buffer_size: usize)->(Sender<Option<(IndexEntry, String)>>, HashMap<String,Index>)
+    pub fn start( path:String, buffer_size: usize, flush_time_in_secs: u64)->(Sender<Option<(IndexEntry, String)>>, HashMap<String,Index>)
     {
         let (tx, rx): (Sender<Option<(IndexEntry,String)>>, Receiver<Option<(IndexEntry,String)>>) = mpsc::channel();
         let limit = buffer_size;
@@ -87,7 +83,7 @@ impl IndexPersistence
                                 let file_path = format!("{}/{}.ix",path,col);
                                 println!("saving index entry to {}!",file_path);
 
-                                if let Ok(o)=PersistenceManager::write_data(&file_path, &buffer)
+                                if let Ok(_)=PersistenceManager::write_data(&file_path, &buffer)
                                 {
                                     buffer.truncate(0);
                                 }
@@ -106,12 +102,22 @@ impl IndexPersistence
                     for (col, buffer) in buffers.iter_mut() 
                     {
                         let file_path = format!("{}/{}.ix",path,col);
-                        if let Ok(o)=PersistenceManager::write_data(&file_path, &buffer)
+                        if let Ok(_)=PersistenceManager::write_data(&file_path, &buffer)
                         {
                             buffer.truncate(0);
                         }
                     }
                 }
+            }
+        });
+        let write_to_file_sender = tx.clone();
+        thread::spawn(move|| 
+        {
+            loop
+            {
+                sleep(Duration::from_secs(flush_time_in_secs));
+                if let Err(_) = write_to_file_sender.send(None)
+                { panic!("Something went wrong");};
             }
         });
         (tx,ix_col)
@@ -123,9 +129,10 @@ impl IndexPersistence
             mem::transmute::<IndexEntry,[u8;INDEX_ENTRY_SIZE]>(ie)
         }  
     }
-    fn stop (index_maintenance:Sender<Option<(IndexEntry, String)>>)
+    pub fn stop (index_maintenance:Sender<Option<(IndexEntry, String)>>)
     { 
-        index_maintenance.send(None);
+        if let Err(_) = index_maintenance.send(None)
+        {panic!("Something went wrong");}
     }
 }
 
@@ -158,11 +165,10 @@ impl Index
         let mut ix = Index::new(col_name.clone());
         let mut more = true;
         let mut off_set=0;
-        let size = (INDEX_ENTRY_SIZE * 1000) as u32;
         let mut buf=[0;8192];
         while more
         {
-            match PersistenceManager::read_data(&file_path,off_set,size,&mut buf)
+            match PersistenceManager::read_data(&file_path,off_set,&mut buf)
             {
                 Ok(red)=>
                 {
@@ -189,7 +195,7 @@ impl Index
                         off_set+=red as u64;
                     }
                 }
-                Err(e)=>
+                Err(_)=>
                 {
                     panic!("Something went wrong");
                 }
@@ -211,13 +217,6 @@ impl Index
         let h=Index::get_hash(key.clone());
 		self.index.get(&h)
 	}
-	//nonblocking not thread safe, only used to populate the index 
-	//before the indexmanager is copied
-	fn fill_entry(&mut self, index_entry:IndexEntry, key:u64) 
-	{
-        let h=Index::get_hash(key.clone());
-		self.index.insert(h,index_entry);
-	}
     fn copy_index_entry(ie:&IndexEntry)->IndexEntry
     {
         IndexEntry{
@@ -237,7 +236,8 @@ impl Index
 			Vacant(entry) => 
 			{ 
 				entry.insert(Index::copy_index_entry(&index_entry));
-                sender.send (Some((index_entry, self.col_name.clone())));
+                if let Err(_) = sender.send (Some((index_entry, self.col_name.clone())))
+                {panic!("Something went wrong");}
 				Ok(())
 			},
 			Occupied(_) => 
@@ -262,7 +262,8 @@ impl Index
 				ec.file = index_entry.file;
 				ec.off_set = index_entry.off_set;
 				ec.size = index_entry.size;
-                sender.send (Some((index_entry, self.col_name.clone())));
+                if let Err(_) = sender.send (Some((index_entry, self.col_name.clone())))
+                {panic!("Something went wrong");}
 				Ok(())
 			},
 		}
@@ -273,7 +274,8 @@ impl Index
 		if let Some(mut e) = self.index.remove(&h)
 		{
             e.size = 0;
-            sender.send (Some((e, self.col_name.clone())));
+            if let Err(_) = sender.send (Some((e, self.col_name.clone())))
+            {panic!("Something went wrong");}
 			Ok(())
 		}
 		else
